@@ -1,19 +1,23 @@
 FROM python:3.12
 
-# Set the working directory in the container
+# Set the working directory
 WORKDIR /app
 
-# Copy the required files to the container
-COPY requirements.txt ./
-
 # Install dependencies
+COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application files
+# Install git-lfs (required for Hugging Face models if used)
+RUN apt-get update && apt-get install -y git-lfs
+
+# Copy application files
 COPY . .
 
-# Expose the port FastAPI runs on
-EXPOSE 8000
+# Set Hugging Face cache directory
+ENV HF_HOME="/app/huggingface"
 
-# Command to run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Expose the port required by Hugging Face
+EXPOSE 7860
+
+# Run FastAPI with Uvicorn (on port 7860 to match Hugging Face expectations)
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
