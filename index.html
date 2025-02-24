@@ -14,7 +14,7 @@
         }
         .container {
             max-width: 500px;
-            margin: 50px auto;
+            margin: 20px auto;
             background: white;
             padding: 20px;
             border-radius: 10px;
@@ -39,13 +39,52 @@
         button:hover {
             background-color: #0056b3;
         }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
         img {
-            margin-top: 20px;
+            margin-top: 10px;
             max-width: 100%;
-            max-height: 300px;
             border: 2px solid black;
             border-radius: 5px;
+            cursor: crosshair;
+        }
+        .hidden {
             display: none;
+        }
+        .image-container {
+            position: relative;
+            display: inline-block;
+            line-height: 0;
+        }
+
+        .dot {
+            width: 10px;
+            height: 10px;
+            background-color: red;
+            border-radius: 50%;
+            position: absolute;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+        .section {
+            margin-top: 20px;
+            transition: opacity 0.3s;
+        }
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 2s linear infinite;
+            margin: 20px auto;
+            display: none;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
     </style>
 </head>
@@ -53,15 +92,47 @@
 
     <div class="container">
         <h2>Upload Image & Segment</h2>
-        <input type="file" id="imageUpload">
+        <input type="file" id="imageUpload" accept="image/*">
         <input type="text" id="textPrompt" placeholder="Enter object (e.g., 'wheel')">
-        <button onclick="segmentImage()">Segment</button>
+        <button id="segmentButton" onclick="segmentImage()">Segment with LangSAM</button>
+        <div id="loader" class="loader"></div>
         
-        <h3>Segmented Output</h3>
-        <img id="outputImage">
+        <!-- LangSAM Section -->
+        <div id="langsamSection" class="section hidden">
+            <h3>LangSAM Result</h3>
+            <img id="segmentedImage">
+            <button id="useSAM2" onclick="enableSAM2()">Use SAM2</button>
+        </div>
+
+        <!-- Original Image Section -->
+        <div id="originalImageSection" class="section hidden">
+            <h3>Original Image (Click to Segment)</h3>
+            <div class="image-container">
+                <img id="originalImage">
+                <div id="clickDot" class="dot hidden"></div>
+            </div>
+        </div>
+
+        <!-- SAM2 Section -->
+        <div id="sam2Section" class="section hidden">
+            <h3>SAM2 Segmentation Result</h3>
+            <img id="sam2Image">
+        </div>
     </div>
 
     <script>
+        let originalImageURL = "";
+        let selectedX = 0, selectedY = 0;
+        let clickEnabled = false;
+
+        // Show the image upload preview
+        document.getElementById('imageUpload').addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                originalImageURL = URL.createObjectURL(file);
+            }
+        });
+
         async function segmentImage() {
             let imageInput = document.getElementById("imageUpload").files[0];
             let textPrompt = document.getElementById("textPrompt").value;
@@ -70,22 +141,122 @@
                 return;
             }
 
+            // Disable button and show loader
+            document.getElementById("segmentButton").disabled = true;
+            document.getElementById("loader").style.display = "block";
+
             let formData = new FormData();
             formData.append("file", imageInput);
             formData.append("text_prompt", textPrompt);
 
-            let response = await fetch("http://127.0.0.1:8000/segment/", {
-                method: "POST",
-                body: formData
-            });
+            try {
+                let response = await fetch("http://127.0.0.1:8000/segment/langsam", {
+                    method: "POST",
+                    body: formData
+                });
 
-            if (response.ok) {
-                let blob = await response.blob();
-                let url = URL.createObjectURL(blob);
-                document.getElementById("outputImage").src = url;
-                document.getElementById("outputImage").style.display = "block";
-            } else {
-                alert("Error segmenting image!");
+                if (response.ok) {
+                    let blob = await response.blob();
+                    let url = URL.createObjectURL(blob);
+                    
+                    // Display LangSAM results
+                    document.getElementById("segmentedImage").src = url;
+                    document.getElementById("langsamSection").classList.remove("hidden");
+                    
+                    // Display original image
+                    document.getElementById("originalImage").src = originalImageURL;
+                    document.getElementById("originalImageSection").classList.remove("hidden");
+                } else {
+                    alert("Error segmenting image: " + await response.text());
+                }
+            } catch (error) {
+                console.error("Error:", error);
+                alert("Network error when segmenting image!");
+            } finally {
+                // Re-enable button and hide loader
+                document.getElementById("segmentButton").disabled = false;
+                document.getElementById("loader").style.display = "none";
+            }
+        }
+
+        function enableSAM2() {
+            // Enable click event on original image
+            document.getElementById("useSAM2").textContent = "SAM2 Mode Active - Click on Image";
+            document.getElementById("useSAM2").disabled = true;
+            clickEnabled = true;
+            
+            // Add click listener
+            document.getElementById("originalImage").addEventListener("click", selectPoint);
+        }
+
+        function selectPoint(event) {
+            if (!clickEnabled) return;
+            
+            let img = document.getElementById("originalImage");
+            let rect = img.getBoundingClientRect();
+            
+            // Get the relative position within the image
+            const clickX = event.clientX - rect.left;
+            const clickY = event.clientY - rect.top;
+
+            // Scale coordinates for the API
+            let scaleX = img.naturalWidth / rect.width;
+            let scaleY = img.naturalHeight / rect.height;
+            selectedX = Math.round(clickX * scaleX);
+            selectedY = Math.round(clickY * scaleY);
+
+            console.log(`Clicked at: (${selectedX}, ${selectedY})`);
+
+            // Position dot at the exact click location 
+            // The key fix: set the position relative to the container
+            let dot = document.getElementById("clickDot");
+            dot.style.left = `${clickX}px`;
+            dot.style.top = `${clickY}px`;
+            dot.classList.remove("hidden");
+
+            // Call SAM2
+            segmentWithSAM2();
+        }
+
+        async function segmentWithSAM2() {
+            let imageInput = document.getElementById("imageUpload").files[0];
+            if (!imageInput) {
+                alert("Please upload an image first!");
+                return;
+            }
+
+            // Show the SAM2 section before making the request
+            document.getElementById("sam2Section").classList.remove("hidden");
+            document.getElementById("loader").style.display = "block";
+
+            let formData = new FormData();
+            formData.append("file", imageInput);
+            formData.append("x", selectedX);
+            formData.append("y", selectedY);
+
+            try {
+                let response = await fetch("http://127.0.0.1:8000/segment/sam2", {
+                    method: "POST",
+                    body: formData
+                });
+
+                if (response.ok) {
+                    let blob = await response.blob();
+                    let url = URL.createObjectURL(blob);
+                    document.getElementById("sam2Image").src = url;
+                } else {
+                    const errorText = await response.text();
+                    console.error("Server error:", errorText);
+                    alert(`Error segmenting with SAM2: ${errorText}`);
+                }
+            } catch (error) {
+                console.error("Network error:", error);
+                alert("Network error when segmenting with SAM2!");
+            } finally {
+                document.getElementById("loader").style.display = "none";
+                // Allow clicking again for another point
+                document.getElementById("useSAM2").textContent = "Click again for different point";
+                document.getElementById("useSAM2").disabled = false;
             }
         }
     </script>
